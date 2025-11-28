@@ -358,6 +358,96 @@ app.post('/api/visits/:id/status', async (req, res) => {
   }
 });
 
+
+// DELETE a user by id
+// DELETE /api/users/:id?deleteVisits=true
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { deleteVisits } = req.query; // optional flag to delete visits by this user
+
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok:false, err:'invalid user id' });
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ ok:false, err:'user not found' });
+
+    // If resident, clear occupant in any Room that matches their roomId
+    if (user.role === 'resident' && user.roomId) {
+      await Room.findOneAndUpdate({ roomLabel: user.roomId }, { $unset: { occupant: "" } }, { new: true });
+    }
+
+    // Optionally delete all Visit docs referencing this user
+    if (deleteVisits === 'true' || deleteVisits === '1') {
+      await Visit.deleteMany({ residentUserId: user._id });
+    }
+
+    // Finally remove the user
+    await User.findByIdAndDelete(id);
+
+    res.json({ ok:true, msg:'user deleted', deletedUserId: id, visitsDeleted: (deleteVisits === 'true' || deleteVisits === '1') });
+  } catch (err) {
+    console.error('Delete user error', err);
+    res.status(500).json({ ok:false, err: err.message });
+  }
+});
+
+
+
+// GET visits for a specific month
+// GET /api/visits/month?year=2025&month=11&roomId=101&status=approved
+app.get('/api/visits/month', async (req, res) => {
+  try {
+    const { year, month, roomId, status } = req.query;
+    if (!year || !month) return res.status(400).json({ ok:false, err:'year and month required (e.g. year=2025&month=11)' });
+
+    const y = parseInt(year, 10);
+    const m = parseInt(month, 10); // 1-12
+    if (isNaN(y) || isNaN(m) || m < 1 || m > 12) return res.status(400).json({ ok:false, err:'invalid year or month' });
+
+    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));            // UTC start of month
+    const end = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0));                  // UTC start of next month
+
+    const query = { createdAt: { $gte: start, $lt: end } };
+    if (roomId) query.roomId = roomId;
+    if (status) query.status = status;
+
+    const visits = await Visit.find(query).sort({ createdAt: -1 }).limit(5000).populate('residentUserId', 'name email phone roomId role');
+    res.json({ ok:true, count: visits.length, visits });
+  } catch (err) {
+    console.error('Month visits error', err);
+    res.status(500).json({ ok:false, err: err.message });
+  }
+});
+
+// GET visits for a specific year
+// GET /api/visits/year?year=2025&roomId=101&status=pending
+app.get('/api/visits/year', async (req, res) => {
+  try {
+    const { year, roomId, status } = req.query;
+    if (!year) return res.status(400).json({ ok:false, err:'year required (e.g. year=2025)' });
+
+    const y = parseInt(year, 10);
+    if (isNaN(y)) return res.status(400).json({ ok:false, err:'invalid year' });
+
+    const start = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));          // start of year UTC
+    const end = new Date(Date.UTC(y + 1, 0, 1, 0, 0, 0, 0));      // start of next year UTC
+
+    const query = { createdAt: { $gte: start, $lt: end } };
+    if (roomId) query.roomId = roomId;
+    if (status) query.status = status;
+
+    const visits = await Visit.find(query).sort({ createdAt: -1 }).limit(20000).populate('residentUserId', 'name email phone roomId role');
+    res.json({ ok:true, count: visits.length, visits });
+  } catch (err) {
+    console.error('Year visits error', err);
+    res.status(500).json({ ok:false, err: err.message });
+  }
+});
+
+
+
+
+
 // ----------------- Start server -----------------
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 Server listening on http://localhost:${PORT}`));
