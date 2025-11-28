@@ -445,7 +445,82 @@ app.get('/api/visits/year', async (req, res) => {
 });
 
 
+// GET visits for a specific room (flexible)
+// GET /api/visits/room/:roomId?status=pending&date=2025-11-28&from=YYYY-MM-DD&to=YYYY-MM-DD&limit=50
+app.get('/api/visits/room/:roomId', async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { status, date, from, to, limit } = req.query;
 
+    const query = { roomId };
+
+    if (status) query.status = status;
+
+    // date or range handling (same approach as your /api/visits)
+    if (date) {
+      const start = new Date(date + 'T00:00:00.000Z');
+      const end = new Date(start);
+      end.setUTCDate(end.getUTCDate() + 1);
+      query.createdAt = { $gte: start, $lt: end };
+    } else if (from || to) {
+      const range = {};
+      if (from) range.$gte = new Date(from + 'T00:00:00.000Z');
+      if (to) {
+        const toDate = new Date(to + 'T00:00:00.000Z');
+        toDate.setUTCDate(toDate.getUTCDate() + 1);
+        range.$lt = toDate;
+      }
+      if (Object.keys(range).length) query.createdAt = range;
+    }
+
+    const lim = Math.min(parseInt(limit || '200', 10), 5000);
+
+    const visits = await Visit.find(query)
+      .sort({ createdAt: -1 })
+      .limit(lim)
+      .populate('residentUserId', 'name email phone roomId role');
+
+    // Normalize photoPath to array for responses (in case schema still stores a string)
+    const normalized = visits.map(v => {
+      const obj = v.toObject();
+      if (!obj.photoPath) obj.photoPath = [];
+      else if (typeof obj.photoPath === 'string') obj.photoPath = [obj.photoPath];
+      return obj;
+    });
+
+    res.json({ ok: true, count: normalized.length, visits: normalized });
+  } catch (err) {
+    console.error('Fetch visits by room error', err);
+    res.status(500).json({ ok: false, err: err.message });
+  }
+});
+
+// GET latest visit for a specific room
+// GET /api/visits/room/:roomId/latest?status=pending
+app.get('/api/visits/room/:roomId/latest', async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { status } = req.query;
+
+    const query = { roomId };
+    if (status) query.status = status;
+
+    const visit = await Visit.findOne(query)
+      .sort({ createdAt: -1 })
+      .populate('residentUserId', 'name email phone roomId role');
+
+    if (!visit) return res.status(404).json({ ok: false, err: 'no visit found' });
+
+    const obj = visit.toObject();
+    if (!obj.photoPath) obj.photoPath = [];
+    else if (typeof obj.photoPath === 'string') obj.photoPath = [obj.photoPath];
+
+    res.json({ ok: true, visit: obj });
+  } catch (err) {
+    console.error('Fetch latest visit error', err);
+    res.status(500).json({ ok: false, err: err.message });
+  }
+});
 
 
 // ----------------- Start server -----------------
