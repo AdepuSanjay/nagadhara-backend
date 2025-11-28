@@ -15,12 +15,11 @@ app.use(bodyParser.json());
 // ----------------- Cloudinary (inlined as requested) -----------------
 // WARNING: for production move these to environment variables.
 cloudinary.config({
-  cloud_name: "dppiuypop", // Replace with your Cloudinary cloud name
-  api_key: "412712715735329", // Replace with your Cloudinary API key
-  api_secret: "m04IUY0-awwtr4YoS-1xvxOOIzU", // Replace with your Cloudinary API secret
+  cloud_name: "dppiuypop",
+  api_key: "412712715735329",
+  api_secret: "m04IUY0-awwtr4YoS-1xvxOOIzU",
 });
 
-// Helper: upload buffer to Cloudinary, returns upload result
 function uploadBufferToCloudinary(buffer, folder = 'security_visitors') {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
@@ -46,7 +45,6 @@ mongoose.connect(MONGO_URL)
 // ----------------- Schemas & Models -----------------
 const { Schema } = mongoose;
 
-// single user model for resident | security | admin
 const UserSchema = new Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
@@ -62,17 +60,21 @@ const RoomSchema = new Schema({
   occupant: { type: String },
 }, { timestamps: true });
 
+// NOTE: changed photoPath to array of strings with default []
 const VisitSchema = new Schema({
   roomId: { type: String, required: true },
   roomLabel: { type: String },
   visitorName: { type: String, required: true },
   purpose: { type: String },
   phone: { type: String },
-  photoPath: { type: String }, // will store Cloudinary secure_url
+  photoPath: { type: [String], default: [] }, // store Cloudinary secure_url(s) as array
   status: { type: String, default: 'pending' }, // pending, approved, denied
   notified: { type: Boolean, default: false },
   residentUserId: { type: mongoose.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
+
+// index for faster room queries
+VisitSchema.index({ roomId: 1, createdAt: -1 });
 
 const User = mongoose.model('User', UserSchema);
 const Room = mongoose.model('Room', RoomSchema);
@@ -92,7 +94,6 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
       body,
       data
     }];
-    // Expo push API accepts an array of messages
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000
@@ -106,12 +107,9 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
 
 // ----------------- Routes -----------------
 
-// Health
 app.get('/', (req, res) => res.json({ ok: true, msg: 'Security backend running' }));
 
-// ----------------- USERS -----------------
-
-// Create a user (resident/security/admin)
+// Create a user
 app.post('/api/users', async (req, res) => {
   try {
     const { name, email, password, role, phone, roomId, expoPushToken } = req.body;
@@ -132,7 +130,6 @@ app.post('/api/users', async (req, res) => {
     });
     await user.save();
 
-    // If resident and roomId provided, create or update room doc
     if (role === 'resident' && roomId) {
       const existingRoom = await Room.findOne({ roomLabel: roomId });
       if (!existingRoom) {
@@ -151,7 +148,7 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-// Single login endpoint (works for all roles)
+// Login
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -160,7 +157,6 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ email: email.toLowerCase(), password });
     if (!user) return res.status(401).json({ ok:false, err:'invalid credentials' });
 
-    // Return the user object (no tokens, plain login as requested)
     res.json({ ok:true, user });
   } catch (err) {
     console.error('Login error', err);
@@ -168,7 +164,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// List users optionally by role (password hidden)
+// List users
 app.get('/api/users', async (req, res) => {
   try {
     const { role } = req.query;
@@ -181,7 +177,7 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// Save expo push token by email or roomId
+// Save expo push token
 app.post('/api/savePushToken', async (req, res) => {
   try {
     const { email, roomId, expoPushToken } = req.body;
@@ -197,7 +193,7 @@ app.post('/api/savePushToken', async (req, res) => {
   }
 });
 
-// ----------------- ROOMS -----------------
+// Rooms
 app.post('/api/rooms', async (req, res) => {
   try {
     const { roomLabel, occupant } = req.body;
@@ -221,26 +217,19 @@ app.get('/api/rooms', async (req, res) => {
   }
 });
 
-// ----------------- VISITS -----------------
-
-// Submit a visitor (multipart): roomId, visitorName, purpose, phone(optional), photo(optional)
-// Using multer memoryStorage and uploading to Cloudinary
+// Submit a visitor (multipart)
 app.post('/api/visitors', upload.single('photo'), async (req, res) => {
   try {
     const { roomId, visitorName, purpose, phone } = req.body;
     if (!roomId || !visitorName) return res.status(400).json({ ok:false, err:'roomId and visitorName required' });
 
-    // 1) Try find room by roomLabel (e.g., "101", "102")
     let roomDoc = await Room.findOne({ roomLabel: roomId });
-
-    // 2) If not found and roomId looks like a valid ObjectId, try findById
     if (!roomDoc && mongoose.Types.ObjectId.isValid(roomId)) {
       roomDoc = await Room.findById(roomId);
     }
 
     const roomLabel = roomDoc ? roomDoc.roomLabel : roomId;
 
-    // find resident user by roomId or by resolved roomLabel
     let resident = await User.findOne({ role: 'resident', roomId: roomId });
     if (!resident && roomLabel && roomLabel !== roomId) {
       resident = await User.findOne({ role: 'resident', roomId: roomLabel });
@@ -252,26 +241,26 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
       visitorName,
       purpose,
       phone,
-      residentUserId: resident ? resident._id : null
+      residentUserId: resident ? resident._id : null,
+      photoPath: [] // ensure array
     };
 
-    // If a file was provided, upload to Cloudinary
     if (req.file && req.file.buffer) {
       try {
         const uploadResult = await uploadBufferToCloudinary(req.file.buffer, 'security_visitors');
-        // store the secure URL (and optionally public_id)
-        visitData.photoPath = uploadResult.secure_url || uploadResult.url;
-        visitData.cloudinaryPublicId = uploadResult.public_id;
+        // store as array (support multiple later)
+        if (uploadResult && (uploadResult.secure_url || uploadResult.url)) {
+          visitData.photoPath.push(uploadResult.secure_url || uploadResult.url);
+          visitData.cloudinaryPublicId = uploadResult.public_id;
+        }
       } catch (err) {
         console.warn('Cloudinary upload failed:', err.message || err);
-        // continue without failing entire request; optionally you can return error
       }
     }
 
     const visit = new Visit(visitData);
     await visit.save();
 
-    // send expo push to resident if token available
     if (resident && resident.expoPushToken) {
       try {
         await sendExpoPush(
@@ -287,17 +276,17 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
       }
     }
 
-    res.json({ ok:true, visit });
+    // return with normalized photoPath (should already be array)
+    const obj = visit.toObject();
+    if (!obj.photoPath) obj.photoPath = [];
+    res.json({ ok:true, visit: obj });
   } catch (err) {
     console.error('Visitor submit error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
 
-// Get visits with optional filters:
-// ?date=YYYY-MM-DD (single day, UTC)
-// ?from=YYYY-MM-DD&to=YYYY-MM-DD (inclusive range)
-// ?roomId=101&status=pending
+// Generic visits listing
 app.get('/api/visits', async (req, res) => {
   try {
     const { date, from, to, roomId, status } = req.query;
@@ -307,7 +296,6 @@ app.get('/api/visits', async (req, res) => {
     if (status) query.status = status;
 
     if (date) {
-      // single UTC day
       const start = new Date(date + 'T00:00:00.000Z');
       const end = new Date(start);
       end.setUTCDate(end.getUTCDate() + 1);
@@ -324,24 +312,31 @@ app.get('/api/visits', async (req, res) => {
     }
 
     const visits = await Visit.find(query).sort({ createdAt: -1 }).limit(2000).populate('residentUserId', 'name email phone roomId role');
-    res.json({ ok:true, count: visits.length, visits });
+    // normalize photoPath for safety
+    const normalized = visits.map(v => {
+      const obj = v.toObject();
+      if (!obj.photoPath) obj.photoPath = [];
+      else if (typeof obj.photoPath === 'string') obj.photoPath = [obj.photoPath];
+      return obj;
+    });
+
+    res.json({ ok:true, count: normalized.length, visits: normalized });
   } catch (err) {
     console.error('Fetch visits error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
 
-// Update visit status (approve/deny/pending)
+// Update visit status
 app.post('/api/visits/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
     if (!['approved','denied','pending'].includes(status)) return res.status(400).json({ ok:false, err:'invalid status' });
 
-    const visit = await Visit.findByIdAndUpdate(id, { status }, { new: true });
+    const visit = await Visit.findByIdAndUpdate(id, { status }, { new: true }).populate('residentUserId', 'name email phone roomId role');
     if (!visit) return res.status(404).json({ ok:false, err:'visit not found' });
 
-    // notify resident (if token) about status change
     if (visit.residentUserId) {
       const resident = await User.findById(visit.residentUserId);
       if (resident && resident.expoPushToken) {
@@ -351,37 +346,34 @@ app.post('/api/visits/:id/status', async (req, res) => {
       }
     }
 
-    res.json({ ok:true, visit });
+    const obj = visit.toObject();
+    if (!obj.photoPath) obj.photoPath = [];
+    res.json({ ok:true, visit: obj });
   } catch (err) {
     console.error('Update visit status error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
 
-
-// DELETE a user by id
-// DELETE /api/users/:id?deleteVisits=true
+// Delete user (unchanged)
 app.delete('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { deleteVisits } = req.query; // optional flag to delete visits by this user
+    const { deleteVisits } = req.query;
 
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok:false, err:'invalid user id' });
 
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ ok:false, err:'user not found' });
 
-    // If resident, clear occupant in any Room that matches their roomId
     if (user.role === 'resident' && user.roomId) {
       await Room.findOneAndUpdate({ roomLabel: user.roomId }, { $unset: { occupant: "" } }, { new: true });
     }
 
-    // Optionally delete all Visit docs referencing this user
     if (deleteVisits === 'true' || deleteVisits === '1') {
       await Visit.deleteMany({ residentUserId: user._id });
     }
 
-    // Finally remove the user
     await User.findByIdAndDelete(id);
 
     res.json({ ok:true, msg:'user deleted', deletedUserId: id, visitsDeleted: (deleteVisits === 'true' || deleteVisits === '1') });
@@ -391,36 +383,38 @@ app.delete('/api/users/:id', async (req, res) => {
   }
 });
 
-
-
-// GET visits for a specific month
-// GET /api/visits/month?year=2025&month=11&roomId=101&status=approved
+// Month / Year endpoints unchanged (they still normalize photoPath)
 app.get('/api/visits/month', async (req, res) => {
   try {
     const { year, month, roomId, status } = req.query;
     if (!year || !month) return res.status(400).json({ ok:false, err:'year and month required (e.g. year=2025&month=11)' });
 
     const y = parseInt(year, 10);
-    const m = parseInt(month, 10); // 1-12
+    const m = parseInt(month, 10);
     if (isNaN(y) || isNaN(m) || m < 1 || m > 12) return res.status(400).json({ ok:false, err:'invalid year or month' });
 
-    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));            // UTC start of month
-    const end = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0));                  // UTC start of next month
+    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0));
 
     const query = { createdAt: { $gte: start, $lt: end } };
     if (roomId) query.roomId = roomId;
     if (status) query.status = status;
 
     const visits = await Visit.find(query).sort({ createdAt: -1 }).limit(5000).populate('residentUserId', 'name email phone roomId role');
-    res.json({ ok:true, count: visits.length, visits });
+    const normalized = visits.map(v => {
+      const obj = v.toObject();
+      if (!obj.photoPath) obj.photoPath = [];
+      else if (typeof obj.photoPath === 'string') obj.photoPath = [obj.photoPath];
+      return obj;
+    });
+
+    res.json({ ok:true, count: normalized.length, visits: normalized });
   } catch (err) {
     console.error('Month visits error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
 
-// GET visits for a specific year
-// GET /api/visits/year?year=2025&roomId=101&status=pending
 app.get('/api/visits/year', async (req, res) => {
   try {
     const { year, roomId, status } = req.query;
@@ -429,24 +423,29 @@ app.get('/api/visits/year', async (req, res) => {
     const y = parseInt(year, 10);
     if (isNaN(y)) return res.status(400).json({ ok:false, err:'invalid year' });
 
-    const start = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));          // start of year UTC
-    const end = new Date(Date.UTC(y + 1, 0, 1, 0, 0, 0, 0));      // start of next year UTC
+    const start = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(y + 1, 0, 1, 0, 0, 0, 0));
 
     const query = { createdAt: { $gte: start, $lt: end } };
     if (roomId) query.roomId = roomId;
     if (status) query.status = status;
 
     const visits = await Visit.find(query).sort({ createdAt: -1 }).limit(20000).populate('residentUserId', 'name email phone roomId role');
-    res.json({ ok:true, count: visits.length, visits });
+    const normalized = visits.map(v => {
+      const obj = v.toObject();
+      if (!obj.photoPath) obj.photoPath = [];
+      else if (typeof obj.photoPath === 'string') obj.photoPath = [obj.photoPath];
+      return obj;
+    });
+
+    res.json({ ok:true, count: normalized.length, visits: normalized });
   } catch (err) {
     console.error('Year visits error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
 
-
-// GET visits for a specific room (flexible)
-// GET /api/visits/room/:roomId?status=pending&date=2025-11-28&from=YYYY-MM-DD&to=YYYY-MM-DD&limit=50
+// GET visits for a specific room
 app.get('/api/visits/room/:roomId', async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -456,7 +455,6 @@ app.get('/api/visits/room/:roomId', async (req, res) => {
 
     if (status) query.status = status;
 
-    // date or range handling (same approach as your /api/visits)
     if (date) {
       const start = new Date(date + 'T00:00:00.000Z');
       const end = new Date(start);
@@ -480,7 +478,6 @@ app.get('/api/visits/room/:roomId', async (req, res) => {
       .limit(lim)
       .populate('residentUserId', 'name email phone roomId role');
 
-    // Normalize photoPath to array for responses (in case schema still stores a string)
     const normalized = visits.map(v => {
       const obj = v.toObject();
       if (!obj.photoPath) obj.photoPath = [];
@@ -496,7 +493,6 @@ app.get('/api/visits/room/:roomId', async (req, res) => {
 });
 
 // GET latest visit for a specific room
-// GET /api/visits/room/:roomId/latest?status=pending
 app.get('/api/visits/room/:roomId/latest', async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -521,7 +517,6 @@ app.get('/api/visits/room/:roomId/latest', async (req, res) => {
     res.status(500).json({ ok: false, err: err.message });
   }
 });
-
 
 // ----------------- Start server -----------------
 const PORT = process.env.PORT || 4000;
