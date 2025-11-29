@@ -51,8 +51,7 @@ const UserSchema = new Schema({
   password: { type: String, required: true }, // plain text (as requested)
   role: { type: String, enum: ['resident','security','admin'], default: 'resident' },
   phone: { type: String },
-  roomId: { type: String }, // for residents
-  expoPushToken: { type: String },
+  roomId: { type: String },
 }, { timestamps: true });
 
 const RoomSchema = new Schema({
@@ -177,21 +176,7 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// Save expo push token
-app.post('/api/savePushToken', async (req, res) => {
-  try {
-    const { email, roomId, expoPushToken } = req.body;
-    let user = null;
-    if (email) user = await User.findOneAndUpdate({ email: email.toLowerCase() }, { expoPushToken }, { new: true });
-    else if (roomId) user = await User.findOneAndUpdate({ roomId }, { expoPushToken }, { new: true });
-    else return res.status(400).json({ ok:false, err:'email or roomId required' });
 
-    if (!user) return res.status(404).json({ ok:false, err:'user not found' });
-    res.json({ ok:true, user });
-  } catch (err) {
-    res.status(500).json({ ok:false, err: err.message });
-  }
-});
 
 // Rooms
 app.post('/api/rooms', async (req, res) => {
