@@ -10,10 +10,10 @@ const streamifier = require('streamifier');
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '10mb' }));
 
-// ----------------- Cloudinary (inlined as requested) -----------------
-// WARNING: for production move these to environment variables.
+// ----------------- Cloudinary (inlined as requested) ----------------- //
+// WARNING: move these to env vars for production
 cloudinary.config({
   cloud_name: "dppiuypop",
   api_key: "412712715735329",
@@ -52,7 +52,7 @@ const UserSchema = new Schema({
   role: { type: String, enum: ['resident','security','admin'], default: 'resident' },
   phone: { type: String },
   roomId: { type: String },
-expoPushToken: { type: String },
+  expoPushToken: { type: String }, // <-- store Expo push token here
 }, { timestamps: true });
 
 const RoomSchema = new Schema({
@@ -60,7 +60,6 @@ const RoomSchema = new Schema({
   occupant: { type: String },
 }, { timestamps: true });
 
-// NOTE: changed photoPath to array of strings with default []
 const VisitSchema = new Schema({
   roomId: { type: String, required: true },
   roomLabel: { type: String },
@@ -73,7 +72,6 @@ const VisitSchema = new Schema({
   residentUserId: { type: mongoose.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
-// index for faster room queries
 VisitSchema.index({ roomId: 1, createdAt: -1 });
 
 const User = mongoose.model('User', UserSchema);
@@ -89,15 +87,19 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
-      sound: 'default',
       title,
       body,
+      // use custom sound name. This must match file in resident app assets (app.json).
+      sound: 'ring.wav',
+      priority: 'high',
       data
     }];
+
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000
     });
+
     return resp.data;
   } catch (err) {
     console.error('Expo push error', err.response ? err.response.data : err.message);
@@ -106,7 +108,6 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
 }
 
 // ----------------- Routes -----------------
-
 app.get('/', (req, res) => res.json({ ok: true, msg: 'Security backend running' }));
 
 // Create a user
@@ -141,25 +142,52 @@ app.post('/api/users', async (req, res) => {
       }
     }
 
-    res.json({ ok:true, user });
+    const out = user.toObject();
+    delete out.password;
+    res.json({ ok:true, user: out });
   } catch (err) {
     console.error('Create user error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
 
-// Login
+// Login (and return user)
 app.post('/api/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, expoPushToken } = req.body;
     if (!email || !password) return res.status(400).json({ ok:false, err:'email + password required' });
 
     const user = await User.findOne({ email: email.toLowerCase(), password });
     if (!user) return res.status(401).json({ ok:false, err:'invalid credentials' });
 
-    res.json({ ok:true, user });
+    // update expoPushToken if provided or changed
+    if (expoPushToken && user.expoPushToken !== expoPushToken) {
+      user.expoPushToken = expoPushToken;
+      await user.save();
+    }
+
+    const out = user.toObject();
+    delete out.password;
+    res.json({ ok:true, user: out });
   } catch (err) {
     console.error('Login error', err);
+    res.status(500).json({ ok:false, err: err.message });
+  }
+});
+
+// Update a user's expo push token (useful when token changes)
+app.post('/api/users/:id/push-token', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { expoPushToken } = req.body;
+    if (!expoPushToken) return res.status(400).json({ ok:false, err:'expoPushToken required' });
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok:false, err:'invalid id' });
+
+    const user = await User.findByIdAndUpdate(id, { expoPushToken }, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ ok:false, err:'user not found' });
+    res.json({ ok:true, user });
+  } catch (err) {
+    console.error('Update push token error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
@@ -176,8 +204,6 @@ app.get('/api/users', async (req, res) => {
     res.status(500).json({ ok:false, err: err.message });
   }
 });
-
-
 
 // Rooms
 app.post('/api/rooms', async (req, res) => {
@@ -213,7 +239,6 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
     if (!roomDoc && mongoose.Types.ObjectId.isValid(roomId)) {
       roomDoc = await Room.findById(roomId);
     }
-
     const roomLabel = roomDoc ? roomDoc.roomLabel : roomId;
 
     let resident = await User.findOne({ role: 'resident', roomId: roomId });
@@ -228,13 +253,12 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
       purpose,
       phone,
       residentUserId: resident ? resident._id : null,
-      photoPath: [] // ensure array
+      photoPath: []
     };
 
     if (req.file && req.file.buffer) {
       try {
         const uploadResult = await uploadBufferToCloudinary(req.file.buffer, 'security_visitors');
-        // store as array (support multiple later)
         if (uploadResult && (uploadResult.secure_url || uploadResult.url)) {
           visitData.photoPath.push(uploadResult.secure_url || uploadResult.url);
           visitData.cloudinaryPublicId = uploadResult.public_id;
@@ -247,6 +271,7 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
     const visit = new Visit(visitData);
     await visit.save();
 
+    // Send push to resident if token present
     if (resident && resident.expoPushToken) {
       try {
         await sendExpoPush(
@@ -262,7 +287,6 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
       }
     }
 
-    // return with normalized photoPath (should already be array)
     const obj = visit.toObject();
     if (!obj.photoPath) obj.photoPath = [];
     res.json({ ok:true, visit: obj });
@@ -277,7 +301,6 @@ app.get('/api/visits', async (req, res) => {
   try {
     const { date, from, to, roomId, status } = req.query;
     const query = {};
-
     if (roomId) query.roomId = roomId;
     if (status) query.status = status;
 
@@ -298,7 +321,6 @@ app.get('/api/visits', async (req, res) => {
     }
 
     const visits = await Visit.find(query).sort({ createdAt: -1 }).limit(2000).populate('residentUserId', 'name email phone roomId role');
-    // normalize photoPath for safety
     const normalized = visits.map(v => {
       const obj = v.toObject();
       if (!obj.photoPath) obj.photoPath = [];
@@ -328,7 +350,7 @@ app.post('/api/visits/:id/status', async (req, res) => {
       if (resident && resident.expoPushToken) {
         try {
           await sendExpoPush(resident.expoPushToken, `Visitor ${status}`, `${visit.visitorName} has been ${status}`, { type:'visit_status', visitId: visit._id, status });
-        } catch (e) { /* ignore */ }
+        } catch (e) { /* ignore push errors */ }
       }
     }
 
@@ -341,12 +363,11 @@ app.post('/api/visits/:id/status', async (req, res) => {
   }
 });
 
-// Delete user (unchanged)
+// Delete user
 app.delete('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { deleteVisits } = req.query;
-
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok:false, err:'invalid user id' });
 
     const user = await User.findById(id);
@@ -369,7 +390,7 @@ app.delete('/api/users/:id', async (req, res) => {
   }
 });
 
-// Month / Year endpoints unchanged (they still normalize photoPath)
+// Month / Year endpoints
 app.get('/api/visits/month', async (req, res) => {
   try {
     const { year, month, roomId, status } = req.query;
@@ -436,7 +457,6 @@ app.get('/api/visits/room/:roomId', async (req, res) => {
   try {
     const { roomId } = req.params;
     const { status, date, from, to, limit } = req.query;
-
     const query = { roomId };
 
     if (status) query.status = status;
@@ -483,7 +503,6 @@ app.get('/api/visits/room/:roomId/latest', async (req, res) => {
   try {
     const { roomId } = req.params;
     const { status } = req.query;
-
     const query = { roomId };
     if (status) query.status = status;
 
