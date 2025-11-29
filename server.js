@@ -52,6 +52,7 @@ const UserSchema = new Schema({
   role: { type: String, enum: ['resident','security','admin'], default: 'resident' },
   phone: { type: String },
   roomId: { type: String },
+expoPushToken: { type: String },
 }, { timestamps: true });
 
 const RoomSchema = new Schema({
