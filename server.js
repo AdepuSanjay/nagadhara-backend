@@ -90,7 +90,7 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
       title,
       body,
       // use custom sound name. This must match file in resident app assets (app.json).
-      sound: 'ring.wav',
+      sound: 'ring.mp3',
       priority: 'high',
       data
     }];
