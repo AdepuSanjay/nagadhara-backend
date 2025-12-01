@@ -12,8 +12,8 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
 
-// ----------------- Cloudinary (inlined as requested) ----------------- //
-// WARNING: move these to env vars for production
+// ----------------- Cloudinary ----------------- //
+// (move to env vars in production)
 cloudinary.config({
   cloud_name: "dppiuypop",
   api_key: "412712715735329",
@@ -33,7 +33,7 @@ function uploadBufferToCloudinary(buffer, folder = 'security_visitors') {
   });
 }
 
-// ----------------- MongoDB (direct string as requested) -----------------
+// ----------------- MongoDB -----------------
 const MONGO_URL = 'mongodb+srv://abc:1234@cluster0.nnjwt12.mongodb.net/security';
 mongoose.connect(MONGO_URL)
   .then(() => console.log('✅ MongoDB connected'))
@@ -42,17 +42,16 @@ mongoose.connect(MONGO_URL)
     process.exit(1);
   });
 
-// ----------------- Schemas & Models -----------------
 const { Schema } = mongoose;
 
 const UserSchema = new Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
-  password: { type: String, required: true }, // plain text (as requested)
+  password: { type: String, required: true },
   role: { type: String, enum: ['resident','security','admin'], default: 'resident' },
   phone: { type: String },
   roomId: { type: String },
-  expoPushToken: { type: String }, // <-- store Expo push token here
+  expoPushToken: { type: String },
 }, { timestamps: true });
 
 const RoomSchema = new Schema({
@@ -66,8 +65,8 @@ const VisitSchema = new Schema({
   visitorName: { type: String, required: true },
   purpose: { type: String },
   phone: { type: String },
-  photoPath: { type: [String], default: [] }, // store Cloudinary secure_url(s) as array
-  status: { type: String, default: 'pending' }, // pending, approved, denied
+  photoPath: { type: [String], default: [] },
+  status: { type: String, default: 'pending' },
   notified: { type: Boolean, default: false },
   residentUserId: { type: mongoose.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
@@ -78,19 +77,26 @@ const User = mongoose.model('User', UserSchema);
 const Room = mongoose.model('Room', RoomSchema);
 const Visit = mongoose.model('Visit', VisitSchema);
 
-// ----------------- multer (memory storage for direct Cloudinary upload) -----------------
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// ----------------- Expo Push helper -----------------
+/**
+ * sendExpoPush:
+ * - top-level "sound": 'ring.mp3' (iOS expects filename with extension)
+ * - include android.channelId: 'visitor-channel' so Android uses the right channel sound (resource name mapped by build)
+ */
 async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
       title,
       body,
-      // use custom sound name. This must match file in resident app assets (app.json).
+      // iOS uses filename with extension in payload
       sound: 'ring.mp3',
+      // Android channel id must match the channel created inside the app
+      android: {
+        channelId: 'visitor-channel',
+      },
       priority: 'high',
       data
     }];
@@ -160,7 +166,6 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ email: email.toLowerCase(), password });
     if (!user) return res.status(401).json({ ok:false, err:'invalid credentials' });
 
-    // update expoPushToken if provided or changed
     if (expoPushToken && user.expoPushToken !== expoPushToken) {
       user.expoPushToken = expoPushToken;
       await user.save();
@@ -175,7 +180,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Update a user's expo push token (useful when token changes)
+// Update user's expo token
 app.post('/api/users/:id/push-token', async (req, res) => {
   try {
     const { id } = req.params;
@@ -523,6 +528,5 @@ app.get('/api/visits/room/:roomId/latest', async (req, res) => {
   }
 });
 
-// ----------------- Start server -----------------
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 Server listening on http://localhost:${PORT}`));
