@@ -83,16 +83,25 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ----------------- Expo Push helper -----------------
+// server.js - update sendExpoPush
 async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
       title,
       body,
-      // use custom sound name. This must match file in resident app assets (app.json).
-      sound: 'ring.mp3',
+      // top-level sound is for legacy — better to add platform-specific blocks:
+      sound: 'ring', // some platforms accept bare name; keep for compatibility
       priority: 'high',
-      data
+      data,
+      android: {
+        channelId: 'default',   // ensure this channel exists on the device
+        sound: 'ring',          // also helpful for some Android receivers
+        priority: 'high',
+      },
+      ios: {
+        sound: 'ring.mp3',      // iOS expects the filename present in app bundle
+      }
     }];
 
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
