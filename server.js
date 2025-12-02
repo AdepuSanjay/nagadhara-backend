@@ -92,9 +92,7 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
       sound: 'default',         // <-- use default here (iOS ok)
       priority: 'high',
       data,
-      android: {
-        channelId: 'default'    // <-- REQUIRED so Android uses your channel's custom sound
-      }
+      android: { channelId: 'security_ring' }
     }];
 
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
