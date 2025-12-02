@@ -83,24 +83,17 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ----------------- Expo Push helper -----------------
-// server.js - update sendExpoPush
 async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
       title,
       body,
-      // top-level sound is for legacy — better to add platform-specific blocks:
-      sound: 'ring', // some platforms accept bare name; keep for compatibility
+      sound: 'default',         // <-- use default here (iOS ok)
       priority: 'high',
       data,
       android: {
-        channelId: 'default',   // ensure this channel exists on the device
-        sound: 'ring',          // also helpful for some Android receivers
-        priority: 'high',
-      },
-      ios: {
-        sound: 'ring.mp3',      // iOS expects the filename present in app bundle
+        channelId: 'default'    // <-- REQUIRED so Android uses your channel's custom sound
       }
     }];
 
