@@ -12,8 +12,7 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
 
-// ----------------- Cloudinary (inlined as requested) ----------------- //
-// WARNING: move these to env vars for production
+// ----------------- Cloudinary ----------------- //
 cloudinary.config({
   cloud_name: "dppiuypop",
   api_key: "412712715735329",
@@ -33,7 +32,7 @@ function uploadBufferToCloudinary(buffer, folder = 'security_visitors') {
   });
 }
 
-// ----------------- MongoDB (direct string as requested) -----------------
+// ----------------- MongoDB -----------------
 const MONGO_URL = 'mongodb+srv://abc:1234@cluster0.nnjwt12.mongodb.net/security';
 mongoose.connect(MONGO_URL)
   .then(() => console.log('✅ MongoDB connected'))
@@ -42,17 +41,16 @@ mongoose.connect(MONGO_URL)
     process.exit(1);
   });
 
-// ----------------- Schemas & Models -----------------
 const { Schema } = mongoose;
 
 const UserSchema = new Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
-  password: { type: String, required: true }, // plain text (as requested)
+  password: { type: String, required: true },
   role: { type: String, enum: ['resident','security','admin'], default: 'resident' },
   phone: { type: String },
   roomId: { type: String },
-  expoPushToken: { type: String }, // <-- store Expo push token here
+  expoPushToken: { type: String },
 }, { timestamps: true });
 
 const RoomSchema = new Schema({
@@ -66,8 +64,8 @@ const VisitSchema = new Schema({
   visitorName: { type: String, required: true },
   purpose: { type: String },
   phone: { type: String },
-  photoPath: { type: [String], default: [] }, // store Cloudinary secure_url(s) as array
-  status: { type: String, default: 'pending' }, // pending, approved, denied
+  photoPath: { type: [String], default: [] },
+  status: { type: String, default: 'pending' },
   notified: { type: Boolean, default: false },
   residentUserId: { type: mongoose.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
@@ -78,21 +76,28 @@ const User = mongoose.model('User', UserSchema);
 const Room = mongoose.model('Room', RoomSchema);
 const Visit = mongoose.model('Visit', VisitSchema);
 
-// ----------------- multer (memory storage for direct Cloudinary upload) -----------------
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// ----------------- Expo Push helper -----------------
+// ----------------- Expo Push helper (updated) -----------------
 async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
       title,
       body,
-      // use custom sound name. This must match file in resident app assets (app.json).
-      sound: 'ring.mp3',
+      // top-level sound (some clients accept bare name)
+      sound: 'ring',
       priority: 'high',
-      data
+      data,
+      android: {
+        channelId: 'default', // must match client channel id
+        sound: 'ring',        // bare name; Android uses resource in res/raw/ring.mp3
+        priority: 'high',
+      },
+      ios: {
+        sound: 'ring.mp3', // filename as included in iOS bundle
+      }
     }];
 
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
@@ -107,10 +112,9 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
   }
 }
 
-// ----------------- Routes -----------------
+// ----------------- Routes ----------------- //
 app.get('/', (req, res) => res.json({ ok: true, msg: 'Security backend running' }));
 
-// Create a user
 app.post('/api/users', async (req, res) => {
   try {
     const { name, email, password, role, phone, roomId, expoPushToken } = req.body;
@@ -151,7 +155,6 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-// Login (and return user)
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password, expoPushToken } = req.body;
@@ -160,7 +163,6 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ email: email.toLowerCase(), password });
     if (!user) return res.status(401).json({ ok:false, err:'invalid credentials' });
 
-    // update expoPushToken if provided or changed
     if (expoPushToken && user.expoPushToken !== expoPushToken) {
       user.expoPushToken = expoPushToken;
       await user.save();
@@ -175,7 +177,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Update a user's expo push token (useful when token changes)
 app.post('/api/users/:id/push-token', async (req, res) => {
   try {
     const { id } = req.params;
@@ -192,7 +193,6 @@ app.post('/api/users/:id/push-token', async (req, res) => {
   }
 });
 
-// List users
 app.get('/api/users', async (req, res) => {
   try {
     const { role } = req.query;
@@ -205,7 +205,6 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// Rooms
 app.post('/api/rooms', async (req, res) => {
   try {
     const { roomLabel, occupant } = req.body;
@@ -229,7 +228,6 @@ app.get('/api/rooms', async (req, res) => {
   }
 });
 
-// Submit a visitor (multipart)
 app.post('/api/visitors', upload.single('photo'), async (req, res) => {
   try {
     const { roomId, visitorName, purpose, phone } = req.body;
@@ -271,7 +269,6 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
     const visit = new Visit(visitData);
     await visit.save();
 
-    // Send push to resident if token present
     if (resident && resident.expoPushToken) {
       try {
         await sendExpoPush(
@@ -296,7 +293,6 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
   }
 });
 
-// Generic visits listing
 app.get('/api/visits', async (req, res) => {
   try {
     const { date, from, to, roomId, status } = req.query;
@@ -335,7 +331,6 @@ app.get('/api/visits', async (req, res) => {
   }
 });
 
-// Update visit status
 app.post('/api/visits/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
@@ -363,7 +358,6 @@ app.post('/api/visits/:id/status', async (req, res) => {
   }
 });
 
-// Delete user
 app.delete('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -390,7 +384,6 @@ app.delete('/api/users/:id', async (req, res) => {
   }
 });
 
-// Month / Year endpoints
 app.get('/api/visits/month', async (req, res) => {
   try {
     const { year, month, roomId, status } = req.query;
@@ -452,7 +445,6 @@ app.get('/api/visits/year', async (req, res) => {
   }
 });
 
-// GET visits for a specific room
 app.get('/api/visits/room/:roomId', async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -498,7 +490,6 @@ app.get('/api/visits/room/:roomId', async (req, res) => {
   }
 });
 
-// GET latest visit for a specific room
 app.get('/api/visits/room/:roomId/latest', async (req, res) => {
   try {
     const { roomId } = req.params;
