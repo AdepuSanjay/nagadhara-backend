@@ -89,10 +89,13 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
       to: expoPushToken,
       title,
       body,
-      sound: 'default',         // <-- use default here (iOS ok)
+      sound: 'ring',            // top-level fallback
       priority: 'high',
       data,
-      android: { channelId: 'security_ring' }
+      android: {
+        channelId: 'security_ring',
+        sound: 'ring'           // Android-specific
+      }
     }];
 
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
@@ -106,7 +109,6 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
     throw err;
   }
 }
-
 // ----------------- Routes -----------------
 app.get('/', (req, res) => res.json({ ok: true, msg: 'Security backend running' }));
 
