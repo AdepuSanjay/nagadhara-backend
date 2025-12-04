@@ -83,7 +83,9 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ----------------- Expo Push helper -----------------
-async function sendExpoPush(expoPushToken, title, body, data = {}) {
+
+
+export async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
@@ -93,8 +95,8 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
       priority: 'high',
       data,
       android: {
-        channelId: 'security_ring',
-        sound: 'ring'           // Android-specific
+        channelId: 'miscellaneous', // use the miscellaneous channel we create
+        sound: 'ring'
       }
     }];
 
@@ -109,6 +111,13 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
     throw err;
   }
 }
+
+
+
+
+
+
+
 // ----------------- Routes -----------------
 app.get('/', (req, res) => res.json({ ok: true, msg: 'Security backend running' }));
 
