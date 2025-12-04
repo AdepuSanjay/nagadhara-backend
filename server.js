@@ -83,16 +83,25 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ----------------- Expo Push helper -----------------
+// Updated: use 'miscellaneous' channel and 'ring' sound.
+// Server sends:
+//  - top-level sound: 'ring' (fallback)
+//  - android.channelId: 'miscellaneous' (match client channel created on install)
+//  - android.sound: 'ring'
 async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
       title,
       body,
-      // use custom sound name. This must match file in resident app assets (app.json).
-      sound: 'ring.mp3',
+      // top-level sound fallback (Expo)
+      sound: 'ring',
       priority: 'high',
-      data
+      data,
+      android: {
+        channelId: 'miscellaneous',
+        sound: 'ring'
+      }
     }];
 
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
