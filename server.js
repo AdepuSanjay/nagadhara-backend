@@ -10,10 +10,6 @@ const streamifier = require('streamifier');
 
 const app = express();
 app.use(cors());
-
-// Body parsers
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(bodyParser.json({ limit: '10mb' }));
 
 // ----------------- Cloudinary (inlined as requested) ----------------- //
@@ -39,10 +35,7 @@ function uploadBufferToCloudinary(buffer, folder = 'security_visitors') {
 
 // ----------------- MongoDB (direct string as requested) -----------------
 const MONGO_URL = 'mongodb+srv://abc:1234@cluster0.nnjwt12.mongodb.net/security';
-mongoose.connect(MONGO_URL, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
+mongoose.connect(MONGO_URL)
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => {
     console.error('MongoDB connection error:', err);
@@ -59,7 +52,7 @@ const UserSchema = new Schema({
   role: { type: String, enum: ['resident','security','admin'], default: 'resident' },
   phone: { type: String },
   roomId: { type: String },
-  expoPushToken: { type: String },
+  expoPushToken: { type: String }, // <-- store Expo push token here
 }, { timestamps: true });
 
 const RoomSchema = new Schema({
@@ -74,7 +67,6 @@ const VisitSchema = new Schema({
   purpose: { type: String },
   phone: { type: String },
   photoPath: { type: [String], default: [] }, // store Cloudinary secure_url(s) as array
-  cloudinaryPublicId: { type: String }, // store public id (optional)
   status: { type: String, default: 'pending' }, // pending, approved, denied
   notified: { type: Boolean, default: false },
   residentUserId: { type: mongoose.Types.ObjectId, ref: 'User' },
@@ -91,12 +83,18 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ----------------- Expo Push helper -----------------
-const sendExpoPush = async (expoPushToken, title, body, data = {}) => {
+// Updated: use 'miscellaneous' channel and 'ring' sound.
+// Server sends:
+//  - top-level sound: 'ring' (fallback)
+//  - android.channelId: 'miscellaneous' (match client channel created on install)
+//  - android.sound: 'ring'
+async function sendExpoPush(expoPushToken, title, body, data = {}) {
   try {
     const messages = [{
       to: expoPushToken,
       title,
       body,
+      // top-level sound fallback (Expo)
       sound: 'ring',
       priority: 'high',
       data,
@@ -113,15 +111,10 @@ const sendExpoPush = async (expoPushToken, title, body, data = {}) => {
 
     return resp.data;
   } catch (err) {
-    // safer logging if no response object
-    if (err && err.response && err.response.data) {
-      console.error('Expo push error', err.response.data);
-    } else {
-      console.error('Expo push error', err.message || err);
-    }
+    console.error('Expo push error', err.response ? err.response.data : err.message);
     throw err;
   }
-};
+}
 
 // ----------------- Routes -----------------
 app.get('/', (req, res) => res.json({ ok: true, msg: 'Security backend running' }));
@@ -217,7 +210,6 @@ app.get('/api/users', async (req, res) => {
     const users = await User.find(q).select('-password').sort({ createdAt: -1 });
     res.json({ ok:true, users });
   } catch (err) {
-    console.error('List users error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
@@ -233,7 +225,6 @@ app.post('/api/rooms', async (req, res) => {
     await room.save();
     res.json({ ok:true, room });
   } catch (err) {
-    console.error('Create room error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
@@ -243,7 +234,6 @@ app.get('/api/rooms', async (req, res) => {
     const rooms = await Room.find().sort({ roomLabel: 1 });
     res.json({ ok: true, rooms });
   } catch (err) {
-    console.error('Fetch rooms error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
@@ -280,15 +270,12 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
         const uploadResult = await uploadBufferToCloudinary(req.file.buffer, 'security_visitors');
         if (uploadResult && (uploadResult.secure_url || uploadResult.url)) {
           visitData.photoPath.push(uploadResult.secure_url || uploadResult.url);
-          if (uploadResult.public_id) visitData.cloudinaryPublicId = uploadResult.public_id;
+          visitData.cloudinaryPublicId = uploadResult.public_id;
         }
       } catch (err) {
-        console.warn('Cloudinary upload failed:', err && err.message ? err.message : err);
+        console.warn('Cloudinary upload failed:', err.message || err);
       }
     }
-
-    // Ensure photoPath is array
-    if (!Array.isArray(visitData.photoPath)) visitData.photoPath = visitData.photoPath ? [visitData.photoPath] : [];
 
     const visit = new Visit(visitData);
     await visit.save();
@@ -305,7 +292,7 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
         visit.notified = true;
         await visit.save();
       } catch (err) {
-        console.warn('Push failed:', err && err.message ? err.message : err);
+        console.warn('Push failed:', err.message || err);
       }
     }
 
@@ -372,9 +359,7 @@ app.post('/api/visits/:id/status', async (req, res) => {
       if (resident && resident.expoPushToken) {
         try {
           await sendExpoPush(resident.expoPushToken, `Visitor ${status}`, `${visit.visitorName} has been ${status}`, { type:'visit_status', visitId: visit._id, status });
-        } catch (e) {
-          console.warn('Push on status update failed:', e && e.message ? e.message : e);
-        }
+        } catch (e) { /* ignore push errors */ }
       }
     }
 
@@ -550,6 +535,3 @@ app.get('/api/visits/room/:roomId/latest', async (req, res) => {
 // ----------------- Start server -----------------
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 Server listening on http://localhost:${PORT}`));
-
-// Export app for testing if needed
-module.exports = app;
