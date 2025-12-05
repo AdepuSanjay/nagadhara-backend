@@ -98,10 +98,7 @@ async function sendExpoPush(expoPushToken, title, body, data = {}) {
       sound: 'ring',
       priority: 'high',
       data,
-      android: {
-        channelId: 'miscellaneous',
-        sound: 'ring'
-      }
+      android: { channelId: 'visitor_alert_v2', sound: 'ring' }
     }];
 
     const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
