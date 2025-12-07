@@ -52,7 +52,8 @@ const UserSchema = new Schema({
   role: { type: String, enum: ['resident','security','admin'], default: 'resident' },
   phone: { type: String },
   roomId: { type: String },
-  expoPushToken: { type: String }, // <-- store Expo push token here
+  // Support multiple devices per user (set semantics enforced in code)
+  expoPushTokens: { type: [String], default: [] },
 }, { timestamps: true });
 
 const RoomSchema = new Schema({
@@ -83,33 +84,45 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ----------------- Expo Push helper -----------------
-// Updated: use 'miscellaneous' channel and 'ring' sound.
-// Server sends:
-//  - top-level sound: 'ring' (fallback)
-//  - android.channelId: 'miscellaneous' (match client channel created on install)
-//  - android.sound: 'ring'
-async function sendExpoPush(expoPushToken, title, body, data = {}) {
+// Send push notifications to multiple Expo tokens (batches of 100 allowed per request)
+// messages are built for each token with same title/body/data/android settings
+async function sendExpoPushToTokens(tokens = [], title, body, data = {}) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return { ok: true, sent: 0 };
+
+  // Build message array (one message per token)
+  const messages = tokens.map(token => ({
+    to: token,
+    title,
+    body,
+    sound: 'ring',
+    priority: 'high',
+    data,
+    android: { channelId: 'visitor_alert_v2', sound: 'ring' }
+  }));
+
+  // Expo accepts up to ~100 messages per request; we'll chunk to be safe
+  const chunkSize = 100;
+  let sent = 0;
   try {
-    const messages = [{
-      to: expoPushToken,
-      title,
-      body,
-      // top-level sound fallback (Expo)
-      sound: 'ring',
-      priority: 'high',
-      data,
-      android: { channelId: 'visitor_alert_v2', sound: 'ring' }
-    }];
-
-    const resp = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
-    });
-
-    return resp.data;
+    for (let i = 0; i < messages.length; i += chunkSize) {
+      const chunk = messages.slice(i, i + chunkSize);
+      const resp = await axios.post('https://exp.host/--/api/v2/push/send', chunk, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000
+      });
+      // resp.data often contains receipts/ids — we assume request succeeded if HTTP 200
+      if (resp && resp.status >= 200 && resp.status < 300) {
+        sent += chunk.length;
+      } else {
+        console.warn('Expo push chunk responded with non-2xx', resp && resp.status);
+      }
+    }
+    return { ok: true, sent };
   } catch (err) {
-    console.error('Expo push error', err.response ? err.response.data : err.message);
-    throw err;
+    // Log error details for debugging
+    console.error('Expo push error', err.response ? err.response.data || err.response.status : err.message);
+    // NOTE: if you want to remove invalid tokens on failure, you can parse err.response
+    return { ok: false, sent, error: err.response ? err.response.data : err.message };
   }
 }
 
@@ -133,7 +146,7 @@ app.post('/api/users', async (req, res) => {
       role,
       phone,
       roomId: role === 'resident' ? roomId : undefined,
-      expoPushToken
+      expoPushTokens: Array.isArray(expoPushToken) ? expoPushToken : (expoPushToken ? [expoPushToken] : [])
     });
     await user.save();
 
@@ -158,6 +171,7 @@ app.post('/api/users', async (req, res) => {
 });
 
 // Login (and return user)
+// If expoPushToken provided, add to user's token array if not already present
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password, expoPushToken } = req.body;
@@ -166,9 +180,16 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ email: email.toLowerCase(), password });
     if (!user) return res.status(401).json({ ok:false, err:'invalid credentials' });
 
-    // update expoPushToken if provided or changed
-    if (expoPushToken && user.expoPushToken !== expoPushToken) {
-      user.expoPushToken = expoPushToken;
+    let modified = false;
+    if (expoPushToken) {
+      user.expoPushTokens = user.expoPushTokens || [];
+      if (!user.expoPushTokens.includes(expoPushToken)) {
+        user.expoPushTokens.push(expoPushToken);
+        modified = true;
+      }
+    }
+
+    if (modified) {
       await user.save();
     }
 
@@ -182,6 +203,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 // Update a user's expo push token (useful when token changes)
+// This now *adds* the token (set semantics) rather than replacing.
 app.post('/api/users/:id/push-token', async (req, res) => {
   try {
     const { id } = req.params;
@@ -189,9 +211,17 @@ app.post('/api/users/:id/push-token', async (req, res) => {
     if (!expoPushToken) return res.status(400).json({ ok:false, err:'expoPushToken required' });
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok:false, err:'invalid id' });
 
-    const user = await User.findByIdAndUpdate(id, { expoPushToken }, { new: true }).select('-password');
+    const user = await User.findById(id);
     if (!user) return res.status(404).json({ ok:false, err:'user not found' });
-    res.json({ ok:true, user });
+
+    user.expoPushTokens = user.expoPushTokens || [];
+    if (!user.expoPushTokens.includes(expoPushToken)) {
+      user.expoPushTokens.push(expoPushToken);
+    }
+    const saved = await user.save();
+    const out = saved.toObject();
+    delete out.password;
+    res.json({ ok:true, user: out });
   } catch (err) {
     console.error('Update push token error', err);
     res.status(500).json({ ok:false, err: err.message });
@@ -247,9 +277,10 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
     }
     const roomLabel = roomDoc ? roomDoc.roomLabel : roomId;
 
-    let resident = await User.findOne({ role: 'resident', roomId: roomId });
-    if (!resident && roomLabel && roomLabel !== roomId) {
-      resident = await User.findOne({ role: 'resident', roomId: roomLabel });
+    // Find resident(s) by roomId (could be multiple residents)
+    let residents = await User.find({ role: 'resident', roomId: roomId });
+    if ((!residents || residents.length === 0) && roomLabel && roomLabel !== roomId) {
+      residents = await User.find({ role: 'resident', roomId: roomLabel });
     }
 
     const visitData = {
@@ -258,7 +289,7 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
       visitorName,
       purpose,
       phone,
-      residentUserId: resident ? resident._id : null,
+      residentUserId: (residents && residents[0]) ? residents[0]._id : null,
       photoPath: []
     };
 
@@ -277,19 +308,31 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
     const visit = new Visit(visitData);
     await visit.save();
 
-    // Send push to resident if token present
-    if (resident && resident.expoPushToken) {
-      try {
-        await sendExpoPush(
-          resident.expoPushToken,
-          `Visitor at ${roomLabel}`,
-          `${visitorName} — ${purpose || 'No purpose'}`,
-          { type: 'visitor', visitId: visit._id }
-        );
-        visit.notified = true;
-        await visit.save();
-      } catch (err) {
-        console.warn('Push failed:', err.message || err);
+    // Send push to all resident tokens (if any)
+    if (residents && residents.length > 0) {
+      // collect tokens from all matched residents (dedupe)
+      const tokensSet = new Set();
+      residents.forEach(r => {
+        (r.expoPushTokens || []).forEach(t => {
+          if (t) tokensSet.add(t);
+        });
+      });
+      const tokens = Array.from(tokensSet);
+      if (tokens.length > 0) {
+        try {
+          const result = await sendExpoPushToTokens(
+            tokens,
+            `Visitor at ${roomLabel}`,
+            `${visitorName} — ${purpose || 'No purpose'}`,
+            { type: 'visitor', visitId: visit._id }
+          );
+          if (result && result.ok) {
+            visit.notified = true;
+            await visit.save();
+          }
+        } catch (err) {
+          console.warn('Push failed:', err.message || err);
+        }
       }
     }
 
@@ -353,9 +396,9 @@ app.post('/api/visits/:id/status', async (req, res) => {
 
     if (visit.residentUserId) {
       const resident = await User.findById(visit.residentUserId);
-      if (resident && resident.expoPushToken) {
+      if (resident && (resident.expoPushTokens || []).length > 0) {
         try {
-          await sendExpoPush(resident.expoPushToken, `Visitor ${status}`, `${visit.visitorName} has been ${status}`, { type:'visit_status', visitId: visit._id, status });
+          await sendExpoPushToTokens(resident.expoPushTokens, `Visitor ${status}`, `${visit.visitorName} has been ${status}`, { type:'visit_status', visitId: visit._id, status });
         } catch (e) { /* ignore push errors */ }
       }
     }
