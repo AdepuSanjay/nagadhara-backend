@@ -97,7 +97,7 @@ async function sendExpoPushToTokens(tokens = [], title, body, data = {}) {
     sound: 'ring',
     priority: 'high',
     data,
-    android: { channelId: 'visitor_alert_v2', sound: 'ring' }
+    android: { channelId: 'miscellaneous', sound: 'ring' }
   }));
 
   // Expo accepts up to ~100 messages per request; we'll chunk to be safe
