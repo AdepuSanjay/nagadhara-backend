@@ -86,10 +86,10 @@ const upload = multer({ storage });
 // ----------------- Expo Push helper -----------------
 // Send push notifications to multiple Expo tokens (batches of 100 allowed per request)
 // messages are built for each token with same title/body/data/android settings
-async function sendExpoPushToTokens(tokens = [], title, body, data = {}) {
+async function sendExpoPushToTokens(tokens = [], title = '', body = '', data = {}) {
   if (!Array.isArray(tokens) || tokens.length === 0) return { ok: true, sent: 0 };
 
-  // Build message array (one message per token)
+  // Build message array (one message per token) — use the new channel id 'visitor_alerts'
   const messages = tokens.map(token => ({
     to: token,
     title,
@@ -97,35 +97,38 @@ async function sendExpoPushToTokens(tokens = [], title, body, data = {}) {
     sound: 'ring',
     priority: 'high',
     data,
-    android: { channelId: 'miscellaneous', sound: 'ring' }
+    android: { channelId: 'visitor_alerts', sound: 'ring' }
   }));
 
   // Expo accepts up to ~100 messages per request; we'll chunk to be safe
-  const chunkSize = 100;
+  const CHUNK_SIZE = 100;
   let sent = 0;
+  const details = [];
+
   try {
-    for (let i = 0; i < messages.length; i += chunkSize) {
-      const chunk = messages.slice(i, i + chunkSize);
+    for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+      const chunk = messages.slice(i, i + CHUNK_SIZE);
       const resp = await axios.post('https://exp.host/--/api/v2/push/send', chunk, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 15000
       });
-      // resp.data often contains receipts/ids — we assume request succeeded if HTTP 200
+
       if (resp && resp.status >= 200 && resp.status < 300) {
+        // Best-effort count: assume chunk accepted (you can parse resp.data for exact tickets if needed)
         sent += chunk.length;
+        details.push({ ok: true, status: resp.status, length: chunk.length });
       } else {
         console.warn('Expo push chunk responded with non-2xx', resp && resp.status);
+        details.push({ ok: false, status: resp && resp.status });
       }
     }
-    return { ok: true, sent };
+
+    return { ok: true, sent, details };
   } catch (err) {
-    // Log error details for debugging
     console.error('Expo push error', err.response ? err.response.data || err.response.status : err.message);
-    // NOTE: if you want to remove invalid tokens on failure, you can parse err.response
     return { ok: false, sent, error: err.response ? err.response.data : err.message };
   }
 }
-
 // ----------------- Routes -----------------
 app.get('/', (req, res) => res.json({ ok: true, msg: 'Security backend running' }));
 
