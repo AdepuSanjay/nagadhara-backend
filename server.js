@@ -173,63 +173,110 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-// Login (and return user)
-// If expoPushToken provided, add to user's token array if not already present
+
+
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password, expoPushToken } = req.body;
-    if (!email || !password) return res.status(400).json({ ok:false, err:'email + password required' });
+    if (!email || !password)
+      return res.status(400).json({ ok:false, err:'email + password required' });
 
     const user = await User.findOne({ email: email.toLowerCase(), password });
-    if (!user) return res.status(401).json({ ok:false, err:'invalid credentials' });
+    if (!user)
+      return res.status(401).json({ ok:false, err:'invalid credentials' });
 
-    let modified = false;
     if (expoPushToken) {
-      user.expoPushTokens = user.expoPushTokens || [];
+      // 🔥 STEP 1: Remove this token from ALL other users
+      await User.updateMany(
+        { _id: { $ne: user._id } },
+        { $pull: { expoPushTokens: expoPushToken } }
+      );
+
+      // 🔥 STEP 2: Add token to current user if not exists
       if (!user.expoPushTokens.includes(expoPushToken)) {
         user.expoPushTokens.push(expoPushToken);
-        modified = true;
+        await user.save();
       }
-    }
-
-    if (modified) {
-      await user.save();
     }
 
     const out = user.toObject();
     delete out.password;
     res.json({ ok:true, user: out });
+
   } catch (err) {
     console.error('Login error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
 
-// Update a user's expo push token (useful when token changes)
-// This now *adds* the token (set semantics) rather than replacing.
+
+app.post('/api/logout', async (req, res) => {
+  try {
+    const { userId, expoPushToken } = req.body;
+
+    if (!userId || !expoPushToken)
+      return res.status(400).json({ ok:false, err:'userId & expoPushToken required' });
+
+    if (!mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ ok:false, err:'invalid userId' });
+
+    await User.findByIdAndUpdate(
+      userId,
+      { $pull: { expoPushTokens: expoPushToken } }
+    );
+
+    res.json({ ok:true, msg:'Logout successful, token removed' });
+  } catch (err) {
+    console.error('Logout error', err);
+    res.status(500).json({ ok:false, err: err.message });
+  }
+});
+
+
+
+
+
 app.post('/api/users/:id/push-token', async (req, res) => {
   try {
     const { id } = req.params;
     const { expoPushToken } = req.body;
-    if (!expoPushToken) return res.status(400).json({ ok:false, err:'expoPushToken required' });
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok:false, err:'invalid id' });
+
+    if (!expoPushToken)
+      return res.status(400).json({ ok:false, err:'expoPushToken required' });
+
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ ok:false, err:'invalid id' });
+
+    // 🔥 Remove token from all other users
+    await User.updateMany(
+      { _id: { $ne: id } },
+      { $pull: { expoPushTokens: expoPushToken } }
+    );
 
     const user = await User.findById(id);
-    if (!user) return res.status(404).json({ ok:false, err:'user not found' });
+    if (!user)
+      return res.status(404).json({ ok:false, err:'user not found' });
 
-    user.expoPushTokens = user.expoPushTokens || [];
     if (!user.expoPushTokens.includes(expoPushToken)) {
       user.expoPushTokens.push(expoPushToken);
+      await user.save();
     }
-    const saved = await user.save();
-    const out = saved.toObject();
+
+    const out = user.toObject();
     delete out.password;
     res.json({ ok:true, user: out });
+
   } catch (err) {
     console.error('Update push token error', err);
     res.status(500).json({ ok:false, err: err.message });
   }
 });
+
+
+
+
+
+
 
 // List users
 app.get('/api/users', async (req, res) => {
