@@ -91,15 +91,14 @@ async function sendExpoPushToTokens(tokens = [], title = '', body = '', data = {
 
   // Build message array (one message per token) — use the new channel id 'visitor_alerts'
   const messages = tokens.map(token => ({
-    to: token,
-    title,
-    body,
-    sound: 'ring',
-    priority: 'high',
-    data,
-    android: { channelId: 'visitor_alerts', sound: 'ring' }
-  }));
-
+  to: token,
+  title,
+  body,
+  channelId: 'visitor_alerts', // ✅ MUST be top-level
+  sound: 'ring.wav',           // ✅ full filename
+  priority: 'high',
+  data
+}));
   // Expo accepts up to ~100 messages per request; we'll chunk to be safe
   const CHUNK_SIZE = 100;
   let sent = 0;
