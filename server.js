@@ -307,10 +307,30 @@ app.post('/api/rooms', async (req, res) => {
 
 app.get('/api/rooms', async (req, res) => {
   try {
-    const rooms = await Room.find().sort({ roomLabel: 1 });
-    res.json({ ok: true, rooms });
+    const rooms = await Room.find().sort({ roomLabel: 1 }).lean();
+
+    // Attach residents to each room
+    const enrichedRooms = await Promise.all(
+      rooms.map(async (room) => {
+        const residents = await User.find(
+          {
+            role: 'resident',
+            roomId: room.roomLabel
+          },
+          'name email phone role'
+        ).lean();
+
+        return {
+          ...room,
+          residents
+        };
+      })
+    );
+
+    res.json({ ok: true, rooms: enrichedRooms });
   } catch (err) {
-    res.status(500).json({ ok:false, err: err.message });
+    console.error('Fetch rooms error', err);
+    res.status(500).json({ ok: false, err: err.message });
   }
 });
 
