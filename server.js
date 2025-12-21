@@ -174,6 +174,52 @@ app.post('/api/users', async (req, res) => {
 
 
 
+
+
+// Change Password
+app.post('/api/users/:id/change-password', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { currentPassword, newPassword } = req.body;
+
+    // 1. Basic Validation
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ ok: false, err: 'currentPassword and newPassword required' });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, err: 'invalid user id' });
+    }
+
+    // 2. Find User
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ ok: false, err: 'user not found' });
+    }
+
+    // 3. Verify Current Password
+    // Note: Comparing plain text as per your current schema setup
+    if (user.password !== currentPassword) {
+      return res.status(401).json({ ok: false, err: 'Current password is incorrect' });
+    }
+
+    // 4. Update and Save
+    user.password = newPassword;
+    await user.save();
+
+    res.json({ ok: true, msg: 'Password updated successfully' });
+
+  } catch (err) {
+    console.error('Change password error', err);
+    res.status(500).json({ ok: false, err: err.message });
+  }
+});
+
+
+
+
+
+
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password, expoPushToken } = req.body;
