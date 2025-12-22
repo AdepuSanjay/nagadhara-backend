@@ -499,33 +499,46 @@ app.get('/api/visits', async (req, res) => {
   }
 });
 
+
 // Update visit status
+// MODIFIED: Notification logic removed as requested
 app.post('/api/visits/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    if (!['approved','denied','pending'].includes(status)) return res.status(400).json({ ok:false, err:'invalid status' });
-
-    const visit = await Visit.findByIdAndUpdate(id, { status }, { new: true }).populate('residentUserId', 'name email phone roomId role');
-    if (!visit) return res.status(404).json({ ok:false, err:'visit not found' });
-
-    if (visit.residentUserId) {
-      const resident = await User.findById(visit.residentUserId);
-      if (resident && (resident.expoPushTokens || []).length > 0) {
-        try {
-          await sendExpoPushToTokens(resident.expoPushTokens, `Visitor ${status}`, `${visit.visitorName} has been ${status}`, { type:'visit_status', visitId: visit._id, status });
-        } catch (e) { /* ignore push errors */ }
-      }
+    
+    // Validate status
+    if (!['approved', 'denied', 'pending'].includes(status)) {
+      return res.status(400).json({ ok: false, err: 'invalid status' });
     }
 
+    // Update the visit in DB
+    const visit = await Visit.findByIdAndUpdate(
+      id, 
+      { status }, 
+      { new: true }
+    ).populate('residentUserId', 'name email phone roomId role');
+
+    if (!visit) {
+      return res.status(404).json({ ok: false, err: 'visit not found' });
+    }
+
+    // --- REMOVED PUSH NOTIFICATION BLOCK HERE ---
+
+    // Prepare response
     const obj = visit.toObject();
     if (!obj.photoPath) obj.photoPath = [];
-    res.json({ ok:true, visit: obj });
+    
+    res.json({ ok: true, visit: obj });
+
   } catch (err) {
     console.error('Update visit status error', err);
-    res.status(500).json({ ok:false, err: err.message });
+    res.status(500).json({ ok: false, err: err.message });
   }
 });
+
+
+
 
 // Delete user
 app.delete('/api/users/:id', async (req, res) => {
