@@ -174,7 +174,7 @@ app.post('/api/users', async (req, res) => {
 
 
 
-// Delete Room
+// Delete Room and its Residents
 app.delete('/api/rooms/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -183,11 +183,22 @@ app.delete('/api/rooms/:id', async (req, res) => {
     const room = await Room.findById(id);
     if (!room) return res.status(404).json({ ok: false, err: 'Room not found' });
 
-    // Optional: Remove 'roomId' from residents who were in this room so they don't point to a ghost room
-    await User.updateMany({ roomId: room.roomLabel }, { $unset: { roomId: "" } });
+    // 1. Find all residents in this room so we can delete their visits too (Optional but cleaner)
+    const residents = await User.find({ roomId: room.roomLabel });
+    
+    // 2. Delete all visits associated with these residents
+    const residentIds = residents.map(r => r._id);
+    if (residentIds.length > 0) {
+      await Visit.deleteMany({ residentUserId: { $in: residentIds } });
+    }
 
+    // 3. Delete the Residents themselves
+    await User.deleteMany({ roomId: room.roomLabel });
+
+    // 4. Finally, delete the Room
     await Room.findByIdAndDelete(id);
-    res.json({ ok: true, msg: 'Room deleted' });
+
+    res.json({ ok: true, msg: 'Room and its residents deleted successfully' });
   } catch (err) {
     console.error('Delete room error', err);
     res.status(500).json({ ok: false, err: err.message });
