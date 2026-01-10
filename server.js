@@ -279,6 +279,58 @@ app.post('/api/logout', async (req, res) => {
 
 
 
+// Delete user (Resident or Security) along with their associated data
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Validate ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, err: 'Invalid user ID' });
+    }
+
+    // 2. Find the user first to know their role/data
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ ok: false, err: 'User not found' });
+    }
+
+    // 3. Logic for RESIDENTS: Clean up Room and Visits
+    if (user.role === 'resident') {
+      
+      // A. Remove them from the Room (occupant field)
+      if (user.roomId) {
+        await Room.findOneAndUpdate(
+          { roomLabel: user.roomId }, 
+          { $unset: { occupant: "" } } // Removes the field entirely
+        );
+      }
+
+      // B. Delete all Visits associated with this resident
+      // This ensures "ghost" visit logs don't remain for a deleted user
+      await Visit.deleteMany({ residentUserId: user._id });
+    }
+
+    // 4. Logic for SECURITY: 
+    // (Currently, your Visit schema doesn't link visits to a specific security guard ID, 
+    // so strictly speaking, there is no extra data to delete for them besides the account.
+    // If you add logs later, add the delete logic here.)
+
+    // 5. Finally, delete the User account itself
+    await User.findByIdAndDelete(id);
+
+    res.json({ 
+      ok: true, 
+      msg: `User (${user.name}) and all associated data deleted successfully`, 
+      deletedId: id,
+      role: user.role
+    });
+
+  } catch (err) {
+    console.error('Delete user error', err);
+    res.status(500).json({ ok: false, err: err.message });
+  }
+});
 
 
 app.post('/api/users/:id/push-token', async (req, res) => {
