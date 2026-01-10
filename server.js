@@ -174,6 +174,27 @@ app.post('/api/users', async (req, res) => {
 
 
 
+// Delete Room
+app.delete('/api/rooms/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok: false, err: 'Invalid ID' });
+
+    const room = await Room.findById(id);
+    if (!room) return res.status(404).json({ ok: false, err: 'Room not found' });
+
+    // Optional: Remove 'roomId' from residents who were in this room so they don't point to a ghost room
+    await User.updateMany({ roomId: room.roomLabel }, { $unset: { roomId: "" } });
+
+    await Room.findByIdAndDelete(id);
+    res.json({ ok: true, msg: 'Room deleted' });
+  } catch (err) {
+    console.error('Delete room error', err);
+    res.status(500).json({ ok: false, err: err.message });
+  }
+});
+
+
 
 
 // Change Password
